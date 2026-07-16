@@ -642,7 +642,21 @@ module Api
       end
 
       def determine_include_for_find(klass)
-        attrs = virtual_attributes_for(klass) do |type, attr_name, attr_base|
+        includes = virtual_attr_includes_for(klass).to_a + association_attr_includes_for(klass)
+        return unless includes.any?
+
+        includes.each_with_object({}) do |key, include_for_find|
+          if (virtual_includes = klass.virtual_includes(key))
+            ActiveRecord::Base.merge_includes(include_for_find, virtual_includes)
+          else
+            nested = include_for_find
+            key.to_s.split(".").each { |k| nested = nested[k] ||= {} }
+          end
+        end
+      end
+
+      def virtual_attr_includes_for(klass)
+        virtual_attributes_for(klass) do |type, attr_name, attr_base|
           if attr_base.blank?
             # Direct attribute: eager-load if it has virtual includes and isn't SQL-backed
             if klass.virtual_includes(attr_name) && !klass.attribute_supported_by_sql?(attr_name)
@@ -660,26 +674,14 @@ module Api
             attr_base
           end
         end
+      end
 
-        # Eager-load has_many associations when sub-attributes are requested (e.g., vms.name)
-        collection_associations = []
-        if @req.association_attributes?
-          @req.association_attributes.each do |association, _sub_attrs|
-            collection_associations << association if klass.reflect_on_association(association.to_sym)
-          end
-        end
+      # Associations with sub-attributes requested (e.g., vms.name) need to be eager-loaded
+      def association_attr_includes_for(klass)
+        return [] unless @req.association_attributes?
 
-        all_includes = (attrs || []) + collection_associations
-        return unless all_includes.any?
-
-        # Handle nested relationships and convert to a hash
-        all_includes.each_with_object({}) do |key, include_for_find|
-          if (virtual_includes = klass.virtual_includes(key))
-            ActiveRecord::Base.merge_includes(include_for_find, virtual_includes)
-          else
-            nested = include_for_find
-            key.to_s.split(".").each { |k| nested = nested[k] ||= {} }
-          end
+        @req.association_attributes.filter_map do |association, _sub_attrs|
+          association if klass.reflect_on_association(association.to_sym)
         end
       end
 
