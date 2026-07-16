@@ -643,22 +643,19 @@ module Api
 
       def determine_include_for_find(klass)
         attrs = virtual_attributes_for(klass) do |type, attr_name, attr_base|
-          # Case 1: Direct virtual attribute (e.g., "ram_size")(Not association.column format (dot notation), therefore attr_base is blank)
-          if klass.virtual_includes(attr_name) && !klass.attribute_supported_by_sql?(attr_name) && attr_base.blank?
-            attr_name
-          # Case 2: Direct association (e.g., "snapshots", "storage", "ems_cluster")
-          # Eager load associations (RBAC participating or not) to reduce N+1 queries.
-          elsif attr_base.blank?
-            reflection = klass.reflect_on_association(attr_name.to_sym)
-            if reflection && [:has_many, :has_one, :has_and_belongs_to_many, :belongs_to].include?(reflection.macro)
+          if attr_base.blank?
+            # Direct attribute: eager-load if it has virtual includes and isn't SQL-backed
+            if klass.virtual_includes(attr_name) && !klass.attribute_supported_by_sql?(attr_name)
+              attr_name
+            # Direct association (e.g., "snapshots", "storage", "ems_cluster"): eager-load to avoid N+1
+            elsif klass.reflect_on_association(attr_name.to_sym)&.macro&.in?([:has_many, :has_one, :has_and_belongs_to_many, :belongs_to])
               attr_name
             else
               next
             end
-          # Case 3: Nested attribute (e.g., "hardware.host.name")
-          # Eager load nested associations (RBAC participating or not) to reduce N+1 queries.
-          # Exception: custom virtual_attribute_accessor (handled via accessor).
           else
+            # Nested attribute (e.g., "hardware.host.name"): eager-load the base association,
+            # unless it's handled by a custom virtual_attribute_accessor.
             next if virtual_attribute_accessor(type, attr_name)
             attr_base
           end
