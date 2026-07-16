@@ -313,12 +313,48 @@ module Api
 
       def fetch_indirect_virtual_attribute(_type, resource, base, attr, object_hash)
         query_related_objects(base, resource, object_hash)
-        return unless attr_accessible?(object_hash[base], attr)
-        value  = virtual_attribute_search(object_hash[base], attr)
-        result = {attr => normalize_attr(attr, value)}
-        # set nil vtype above to "#{type}/#{resource.id}/#{base.tr('.', '/')}/#{attr}" to support id normalization
-        base.split(".").reverse_each { |level| result = {level => result} }
-        [value, result]
+        related_obj = object_hash[base]
+
+        if collection_association?(related_obj) && @req.association_attributes_for(base).any?
+          fetch_collection_attributes(base, related_obj)
+        else
+          return unless attr_accessible?(related_obj, attr)
+          value  = virtual_attribute_search(related_obj, attr)
+          result = {attr => normalize_attr(attr, value)}
+          base.split(".").reverse_each { |level| result = {level => result} }
+          [value, result]
+        end
+      end
+
+      def fetch_collection_attributes(association, collection)
+        collection_type = collection_type_for(collection)
+        requested_attrs = @req.association_attributes_for(association)
+        return [nil, {}] if collection_type.nil? || requested_attrs.empty?
+
+        # TODO: Only physical attributes supported. Virtual attributes on associations (vms.v_total_snapshots)
+        # would cause N+1 queries - one per associated record even with eager loading. Consider adding
+        # aggregated virtuals to primary model instead (e.g., provider.v_total_vms_snapshots).
+        attrs_to_render = (requested_attrs + ['id']).uniq
+        items = collection.map { |item| normalize_hash(collection_type, item, :render_attributes => attrs_to_render) }
+        [items, {association => items}]
+      end
+
+      # ActiveRecord CollectionProxy and Relation respond to .loaded?; plain Arrays do not
+      def collection_association?(obj)
+        obj.respond_to?(:loaded?)
+      end
+
+      def collection_type_for(collection)
+        klass = if collection_association?(collection)
+                  collection.klass
+                elsif collection.kind_of?(Array) && collection.first
+                  collection.first.class
+                end
+
+        return nil unless klass
+
+        base_klass = klass.respond_to?(:base_model) ? klass.base_model : klass
+        collection_config.name_for_klass(base_klass)&.to_sym
       end
 
       #
@@ -628,15 +664,24 @@ module Api
           end
         end
 
+        # Eager-load has_many associations when sub-attributes are requested (e.g., vms.name)
+        collection_associations = []
+        if @req.association_attributes?
+          @req.association_attributes.each do |association, _sub_attrs|
+            collection_associations << association if klass.reflect_on_association(association.to_sym)
+          end
+        end
+
+        all_includes = (attrs || []) + collection_associations
+        return unless all_includes.any?
+
         # Handle nested relationships and convert to a hash
-        if attrs
-          attrs.each_with_object({}) do |key, include_for_find|
-            if (virtual_includes = klass.virtual_includes(key))
-              ActiveRecord::Base.merge_includes(include_for_find, virtual_includes)
-            else
-              nested = include_for_find
-              key.split(".").each { |k| nested = nested[k] ||= {} }
-            end
+        all_includes.each_with_object({}) do |key, include_for_find|
+          if (virtual_includes = klass.virtual_includes(key))
+            ActiveRecord::Base.merge_includes(include_for_find, virtual_includes)
+          else
+            nested = include_for_find
+            key.to_s.split(".").each { |k| nested = nested[k] ||= {} }
           end
         end
       end
