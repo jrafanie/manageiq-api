@@ -1736,16 +1736,31 @@ describe "Providers API" do
   end
 
   context 'GET /api/providers/:id' do
-    it 'includes endpoints and authentications attributes when explcitly asked' do
+    it 'includes endpoints and authentications attributes when explicitly asked' do
       ems = FactoryBot.create(:ext_management_system)
       api_basic_authorize action_identifier(:providers, :read, :resource_actions, :get)
 
       get(api_provider_url(nil, ems), :params => {:attributes => 'endpoints,authentications'})
 
+      expect(response).to have_http_status(:ok)
       expect(response.parsed_body['authentications']).to be_an_instance_of(Array)
       expect(response.parsed_body['endpoints']).to be_an_instance_of(Array)
+    end
+
+    it 'includes plain has_many association attributes on a resource show request' do
+      ems = FactoryBot.create(:ext_management_system)
+      FactoryBot.create(:authentication, :resource => ems)
+      FactoryBot.create(:endpoint, :resource => ems)
+
+      api_basic_authorize action_identifier(:providers, :read, :resource_actions, :get)
+
+      get(api_provider_url(nil, ems), :params => {:attributes => 'endpoints,authentications'})
 
       expect(response).to have_http_status(:ok)
+      expect(response.parsed_body['authentications']).to be_an_instance_of(Array)
+      expect(response.parsed_body['endpoints']).to be_an_instance_of(Array)
+      expect(response.parsed_body['authentications'].first).to include('href', 'id')
+      expect(response.parsed_body['endpoints'].first).to include('href', 'id')
     end
 
     it 'does not include endpoints and authentications attributes by default' do
