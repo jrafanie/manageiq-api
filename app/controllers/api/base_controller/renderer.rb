@@ -658,22 +658,26 @@ module Api
       def virtual_attr_includes_for(klass)
         virtual_attributes_for(klass) do |type, attr_name, attr_base|
           if attr_base.blank?
-            # Direct attribute: eager-load if it has virtual includes and isn't SQL-backed
-            if klass.virtual_includes(attr_name) && !klass.attribute_supported_by_sql?(attr_name)
-              attr_name
-            # Direct association (e.g., "snapshots", "storage", "ems_cluster"): eager-load to avoid N+1
-            elsif klass.reflect_on_association(attr_name.to_sym)&.macro&.in?([:has_many, :has_one, :has_and_belongs_to_many, :belongs_to])
-              attr_name
-            else
-              next
-            end
-          else
+            attr_name if virtual_with_includes?(klass, attr_name) || real_association?(klass, attr_name)
+          elsif !virtual_attribute_accessor(type, attr_name)
             # Nested attribute (e.g., "hardware.host.name"): eager-load the base association,
             # unless it's handled by a custom virtual_attribute_accessor.
-            next if virtual_attribute_accessor(type, attr_name)
             attr_base
           end
         end
+      end
+
+      # Returns true if the attribute is a virtual attribute that requires eager-loading
+      # its associated data (i.e., it has virtual_includes and cannot be computed in SQL).
+      # Example: ram_size, which is backed by the hardware association.
+      def virtual_with_includes?(klass, attr_name)
+        klass.virtual_includes(attr_name) && !klass.attribute_supported_by_sql?(attr_name)
+      end
+
+      # Returns true if the attribute is a real AR association (has_many, has_one, belongs_to, habtm).
+      # Note: virtual associations (virtual_has_many etc.) without uses: are intentionally excluded here.
+      def real_association?(klass, attr_name)
+        klass.reflect_on_association(attr_name.to_sym)&.macro&.in?([:has_many, :has_one, :has_and_belongs_to_many, :belongs_to])
       end
 
       # Associations with sub-attributes requested (e.g., vms.name) need to be eager-loaded
